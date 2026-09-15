@@ -36,8 +36,15 @@ javafx {
 
 def junitVersion = '5.12.1'
 dependencies {
-    testImplementation("org.junit.jupiter:junit-jupiter-api:${junitVersion}")
-    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:${junitVersion}")
+    testImplementation "org.junit.jupiter:junit-jupiter-api:${junitVersion}"
+    testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:${junitVersion}"
+
+    // Google Auto
+    compileOnly 'com.google.auto.service:auto-service-annotations:1.1.1'
+    annotationProcessor 'com.google.auto.service:auto-service:1.1.1'
+
+    // Google Guice
+    implementation "com.google.inject:guice:7.0.0"
 }
 
 tasks.withType(Test).configureEach {
