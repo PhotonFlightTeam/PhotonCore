@@ -23,6 +23,11 @@ public class Application extends javafx.application.Application {
     @Override
     public void start(Stage stage) throws IOException {
         Injector injector = GlobalInjector.init(this.getCoreModule());
+        PhotonCore core = injector.getInstance(PhotonCore.class);
+
+        for (PhotonService service : core.getServices()) {
+            service.onStartup();
+        }
 
         FXMLLoader fxmlLoader = new FXMLLoader(Application.class.getResource("hello-view.fxml"));
         stage.setTitle("test view lol");
@@ -39,14 +44,14 @@ public class Application extends javafx.application.Application {
             @Override
             protected void configure() {
                 // automatically wire all serviced classes implementing PhotonPlugin or PhotonService
-                this.bindManySingletons(PhotonPlugin.class);
-                this.bindManySingletons(PhotonService.class);
+                this.bindMany(PhotonPlugin.class);
+                this.bindMany(PhotonService.class);
 
                 // wire PhotonCore to its own type as a singleton
                 this.bind(PhotonCore.class).asEagerSingleton();
             }
 
-            private <T> void bindManySingletons(Class<T> serviceType) {
+            private <T> void bindMany(Class<T> serviceType) {
                 Multibinder<T> binder = Multibinder.newSetBinder(this.binder(), serviceType);
 
                 ServiceLoader.load(serviceType)
@@ -73,6 +78,18 @@ public class Application extends javafx.application.Application {
 
     @Override
     public void stop() throws Exception {
+        Injector injector = GlobalInjector.get();
+        if (injector == null) { // I really hope this never happens
+            super.stop();
+            return;
+        }
+
+        PhotonCore core = injector.getInstance(PhotonCore.class);
+
+        for (PhotonService service : core.getServices()) {
+            service.onShutdown();
+        }
+
         super.stop();
     }
 }
