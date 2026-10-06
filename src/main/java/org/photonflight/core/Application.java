@@ -4,38 +4,21 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.multibindings.Multibinder;
-import javafx.beans.property.ReadOnlyObjectProperty;
-import javafx.concurrent.Worker;
-import javafx.fxml.FXMLLoader;
-import javafx.scene.Scene;
-import javafx.scene.web.WebEngine;
-import javafx.stage.Stage;
-import netscape.javascript.JSObject;
 import org.photonflight.core.service.GlobalInjector;
 import org.photonflight.core.service.PhotonPlugin;
 import org.photonflight.core.service.PhotonService;
 
-import java.io.IOException;
 import java.util.ServiceLoader;
 
-public class Application extends javafx.application.Application {
+public class Application {
 
-    @Override
-    public void start(Stage stage) throws IOException {
+    public void start() {
         Injector injector = GlobalInjector.init(this.getCoreModule());
         PhotonCore core = injector.getInstance(PhotonCore.class);
 
         for (PhotonService service : core.getServices()) {
             service.onStartup();
         }
-
-        FXMLLoader fxmlLoader = new FXMLLoader(Application.class.getResource("hello-view.fxml"));
-        stage.setTitle("test view lol");
-
-        Scene scene = new Scene(fxmlLoader.load(), 320, 240);
-
-        stage.setScene(scene);
-        stage.show();
     }
 
     private Module getCoreModule() {
@@ -64,23 +47,9 @@ public class Application extends javafx.application.Application {
         };
     }
 
-    // test code for now... the structure will likely use a method like this
-    public void attachBridge(WebEngine webEngine, Injector injector) {
-        ReadOnlyObjectProperty<Worker.State> property = webEngine.getLoadWorker().stateProperty();
-
-        property.addListener((obs, oldState, newState) -> {
-            if (newState == Worker.State.SUCCEEDED) {
-                JSObject window = (JSObject) webEngine.executeScript("window");
-                window.setMember("PhotonCore", injector.getInstance(PhotonCore.class));
-            }
-        });
-    }
-
-    @Override
-    public void stop() throws Exception {
+    public void stop() {
         Injector injector = GlobalInjector.get();
         if (injector == null) { // I really hope this never happens
-            super.stop();
             return;
         }
 
@@ -89,7 +58,5 @@ public class Application extends javafx.application.Application {
         for (PhotonService service : core.getServices()) {
             service.onShutdown();
         }
-
-        super.stop();
     }
 }
