@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'application'
     id 'io.freefair.lombok' version '8.6'
+    id 'com.google.protobuf' version '0.10.0'
 }
 
 group = 'org.photonflight'
@@ -37,6 +38,35 @@ dependencies {
 
     // Google Guice
     implementation "com.google.inject:guice:7.0.0"
+
+    // GRPC Protobuf
+    implementation 'io.grpc:grpc-protobuf:1.84.1'
+    implementation 'io.grpc:grpc-stub:1.84.1'
+    implementation 'io.grpc:grpc-netty-shaded:1.84.1'
+}
+
+protobuf {
+    protoc {
+        artifact = 'com.google.protobuf:protoc:4.36.2'
+    }
+    plugins {
+        grpc {
+            artifact = 'io.grpc:protoc-gen-grpc-java:1.84.1'
+        }
+    }
+    generateProtoTasks {
+        all()*.plugins {
+            grpc {}
+        }
+    }
+}
+
+sourceSets {
+    main {
+        proto {
+            srcDir 'proto'
+        }
+    }
 }
 
 tasks.withType(Test).configureEach {
