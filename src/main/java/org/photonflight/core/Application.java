@@ -9,8 +9,21 @@ import org.photonflight.core.service.PhotonPlugin;
 import org.photonflight.core.service.PhotonService;
 
 import java.util.ServiceLoader;
+import java.util.concurrent.CountDownLatch;
 
 public class Application {
+
+    public static void main(String[] args) throws InterruptedException {
+        Application application = new Application();
+
+        Runtime.getRuntime().addShutdownHook(
+                new Thread(application::stop, "photoncore-shutdown")
+        );
+
+        application.start();
+
+        new CountDownLatch(1).await();
+    }
 
     public void start() {
         Injector injector = GlobalInjector.init(this.getCoreModule());
