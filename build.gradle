@@ -24,7 +24,7 @@ tasks.withType(JavaCompile).configureEach {
 
 application {
     mainModule.set('org.photonflight.core')
-    mainClass.set('org.photonflight.core.HelloApplication')
+    mainClass.set('org.photonflight.core.Application')
 }
 
 def junitVersion = '5.12.1'
