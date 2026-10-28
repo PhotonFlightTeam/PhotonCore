@@ -1,7 +1,6 @@
 package org.photonflight.core;
 
-import com.google.inject.AbstractModule;
-import com.google.inject.Injector;
+import com.google.inject.*;
 import com.google.inject.Module;
 import com.google.inject.multibindings.Multibinder;
 import org.photonflight.core.service.GlobalInjector;
@@ -9,9 +8,12 @@ import org.photonflight.core.service.PhotonPlugin;
 import org.photonflight.core.service.PhotonService;
 
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
 public class Application {
+
+    private final Set<PhotonService> services;
 
     public static void main(String[] args) throws InterruptedException {
         Application application = new Application();
@@ -25,11 +27,13 @@ public class Application {
         new CountDownLatch(1).await();
     }
 
-    public void start() {
+    public Application() {
         Injector injector = GlobalInjector.init(this.getCoreModule());
-        PhotonCore core = injector.getInstance(PhotonCore.class);
+        this.services = injector.getInstance(Key.get(new TypeLiteral<>(){}));
+    }
 
-        for (PhotonService service : core.getServices()) {
+    public void start() {
+        for (PhotonService service : this.services) {
             service.onStartup();
         }
     }
@@ -66,9 +70,7 @@ public class Application {
             return;
         }
 
-        PhotonCore core = injector.getInstance(PhotonCore.class);
-
-        for (PhotonService service : core.getServices()) {
+        for (PhotonService service : this.services) {
             service.onShutdown();
         }
     }
