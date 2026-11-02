@@ -3,6 +3,7 @@ package org.photonflight.core;
 import com.google.inject.*;
 import com.google.inject.Module;
 import com.google.inject.multibindings.Multibinder;
+import org.photonflight.core.grpc.CoreGrpcServer;
 import org.photonflight.core.service.GlobalInjector;
 import org.photonflight.core.service.PhotonPlugin;
 import org.photonflight.core.service.PhotonService;
@@ -14,6 +15,9 @@ import java.util.concurrent.CountDownLatch;
 public class Application {
 
     private final Set<PhotonService> services;
+    private final CoreGrpcServer grpcServer;
+    private final CountDownLatch stopped = new CountDownLatch(1);
+    private boolean stopping;
 
     public static void main(String[] args) throws InterruptedException {
         Application application = new Application();
@@ -22,20 +26,27 @@ public class Application {
                 new Thread(application::stop, "photoncore-shutdown")
         );
 
-        application.start();
-
-        new CountDownLatch(1).await();
+        try {
+            application.start();
+            application.stopped.await();
+        } finally {
+            application.stop();
+        }
     }
 
     public Application() {
         Injector injector = GlobalInjector.init(this.getCoreModule());
-        this.services = injector.getInstance(Key.get(new TypeLiteral<>(){}));
+        this.services = injector.getInstance(Key.get(new TypeLiteral<>() {
+        }));
+        this.grpcServer = injector.getInstance(CoreGrpcServer.class);
     }
 
-    public void start() {
+    public synchronized void start() {
+        if (stopping) throw new IllegalStateException("Application is stopping");
         for (PhotonService service : this.services) {
             service.onStartup();
         }
+        grpcServer.start();
     }
 
     private Module getCoreModule() {
@@ -43,6 +54,7 @@ public class Application {
 
             @Override
             protected void configure() {
+                bind(Application.class).toInstance(Application.this);
                 // automatically wire all serviced classes implementing PhotonPlugin or PhotonService
                 this.bindMany(PhotonPlugin.class);
                 this.bindMany(PhotonService.class);
@@ -65,13 +77,26 @@ public class Application {
     }
 
     public void stop() {
-        Injector injector = GlobalInjector.get();
-        if (injector == null) { // I really hope this never happens
-            return;
-        }
+        stop(5000);
+    }
 
-        for (PhotonService service : this.services) {
-            service.onShutdown();
+    public synchronized void stop(long gracePeriodMs) {
+        if (stopping) return;
+        stopping = true;
+        try {
+            grpcServer.stop(gracePeriodMs);
+        } finally {
+            try {
+                for (PhotonService service : this.services) {
+                    try {
+                        service.onShutdown();
+                    } catch (RuntimeException error) {
+                        error.printStackTrace(System.err);
+                    }
+                }
+            } finally {
+                stopped.countDown();
+            }
         }
     }
 }
