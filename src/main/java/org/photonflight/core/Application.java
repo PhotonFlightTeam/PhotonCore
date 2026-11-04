@@ -17,10 +17,11 @@ public class Application {
     private final Set<PhotonService> services;
     private final CoreGrpcServer grpcServer;
     private final CountDownLatch stopped = new CountDownLatch(1);
+    private final String[] args;
     private boolean stopping;
 
     public static void main(String[] args) throws InterruptedException {
-        Application application = new Application();
+        Application application = new Application(args);
 
         Runtime.getRuntime().addShutdownHook(
                 new Thread(application::stop, "photoncore-shutdown")
@@ -34,10 +35,10 @@ public class Application {
         }
     }
 
-    public Application() {
+    public Application(String[] args) {
+        this.args = args;
         Injector injector = GlobalInjector.init(this.getCoreModule());
-        this.services = injector.getInstance(Key.get(new TypeLiteral<>() {
-        }));
+        this.services = injector.getInstance(Key.get(new TypeLiteral<>() {}));
         this.grpcServer = injector.getInstance(CoreGrpcServer.class);
     }
 
@@ -46,7 +47,21 @@ public class Application {
         for (PhotonService service : this.services) {
             service.onStartup();
         }
-        grpcServer.start();
+        grpcServer.start(this.port());
+    }
+
+    public int port() {
+        for (String arg : this.args) {
+            String[] split = arg.split("=");
+            String name = split[0];
+
+            if (name.equalsIgnoreCase("PHOTON_CORE_PORT")) {
+                try {
+                    return Integer.parseInt(split[1]);
+                } catch (NumberFormatException e) {}
+            }
+        }
+        throw new IllegalArgumentException("No port was designated through the program's arguments.");
     }
 
     private Module getCoreModule() {

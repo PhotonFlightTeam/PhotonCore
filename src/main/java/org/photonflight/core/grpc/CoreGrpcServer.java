@@ -19,9 +19,7 @@ public final class CoreGrpcServer {
         this.control = control;
     }
 
-    public void start() {
-        String configuredPort = System.getenv().getOrDefault("PHOTON_CORE_PORT", "0");
-        int port = Integer.parseInt(configuredPort);
+    public void start(int port) {
         if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("PHOTON_CORE_PORT must be between 0 and 65535");
         }
