@@ -4,20 +4,20 @@ import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import lombok.RequiredArgsConstructor;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
 
 @Singleton
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 public final class CoreGrpcServer {
-    private final CoreControlGrpcService control;
-    private Server server;
 
-    @Inject
-    public CoreGrpcServer(CoreControlGrpcService control) {
-        this.control = control;
-    }
+    private final CoreControlGrpcService control;
+    private final PointCloudGrpcService points;
+
+    private Server server;
 
     public void start(int port) {
         if (port < 0 || port > 65535) {
@@ -27,7 +27,7 @@ public final class CoreGrpcServer {
         try {
             server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", port))
                     .addService(control)
-                    .addService(new PointCloudGrpcService())
+                    .addService(points)
                     .build().start();
             control.markReady();
             // One JSON line for Electron's future endpoint discovery
