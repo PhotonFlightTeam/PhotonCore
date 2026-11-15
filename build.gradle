@@ -23,7 +23,6 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 application {
-    mainModule.set('org.photonflight.core')
     mainClass.set('org.photonflight.core.Application')
 }
 
