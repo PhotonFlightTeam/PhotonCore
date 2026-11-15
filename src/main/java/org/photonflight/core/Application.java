@@ -7,6 +7,7 @@ import org.photonflight.core.grpc.CoreGrpcServer;
 import org.photonflight.core.service.GlobalInjector;
 import org.photonflight.core.service.PhotonPlugin;
 import org.photonflight.core.service.PhotonService;
+import org.photonflight.core.service.PluginRegistry;
 
 import java.util.ServiceLoader;
 import java.util.Set;
@@ -18,6 +19,7 @@ public class Application {
     private final CoreGrpcServer grpcServer;
     private final CountDownLatch stopped = new CountDownLatch(1);
     private final String[] args;
+    private final PluginRegistry plugins;
     private boolean stopping;
 
     public static void main(String[] args) throws InterruptedException {
@@ -37,7 +39,8 @@ public class Application {
 
     public Application(String[] args) {
         this.args = args;
-        Injector injector = GlobalInjector.init(this.getCoreModule());
+        this.plugins = new PluginRegistry();
+        Injector injector = GlobalInjector.init(this.getCoreModule(), plugins);
         this.services = injector.getInstance(Key.get(new TypeLiteral<>() {}));
         this.grpcServer = injector.getInstance(CoreGrpcServer.class);
     }
@@ -52,13 +55,16 @@ public class Application {
 
     public int port() {
         for (String arg : this.args) {
-            String[] split = arg.split("=");
+            String[] split = arg.split("=", 2);
             String name = split[0];
 
             if (name.equalsIgnoreCase("PHOTON_CORE_PORT")) {
                 try {
+                    if (split.length != 2) throw new NumberFormatException();
                     return Integer.parseInt(split[1]);
-                } catch (NumberFormatException e) {}
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("PHOTON_CORE_PORT must be an integer between 0 and 65535", e);
+                }
             }
         }
         throw new IllegalArgumentException("No port was designated through the program's arguments.");
@@ -70,8 +76,10 @@ public class Application {
             @Override
             protected void configure() {
                 bind(Application.class).toInstance(Application.this);
+                bind(PluginRegistry.class).toInstance(plugins);
                 // automatically wire all serviced classes implementing PhotonPlugin or PhotonService
-                this.bindMany(PhotonPlugin.class);
+                Multibinder<PhotonPlugin> pluginBinder = Multibinder.newSetBinder(binder(), PhotonPlugin.class);
+                plugins.activePlugins().forEach(plugin -> pluginBinder.addBinding().toInstance(plugin));
                 this.bindMany(PhotonService.class);
 
                 // wire PhotonCore to its own type as a singleton
@@ -84,6 +92,7 @@ public class Application {
                 ServiceLoader.load(serviceType)
                         .stream()
                         .map(ServiceLoader.Provider::type)
+                        .filter(plugins::isActive)
                         .forEach(type -> {
                             binder.addBinding().to(type);
                         });

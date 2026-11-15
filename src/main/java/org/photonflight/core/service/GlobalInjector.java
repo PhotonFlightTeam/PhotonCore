@@ -7,7 +7,6 @@ import com.google.inject.Module;
 import lombok.experimental.UtilityClass;
 
 import java.util.List;
-import java.util.ServiceLoader;
 
 /// Should only be used in cases where Guice is completely unavailable.
 /// Best practice is for us to never use this. If it's required, though, we have it.
@@ -20,13 +19,12 @@ public class GlobalInjector {
         return injector;
     }
 
-    public static Injector init(Module coreModule) {
+    public static Injector init(Module coreModule, PluginRegistry registry) {
         if (injector != null) return injector;
 
-        ServiceLoader<PhotonPlugin> pluginLoader = ServiceLoader.load(PhotonPlugin.class);
         List<Module> modules = Lists.newArrayList(coreModule);
 
-        for (PhotonPlugin plugin : pluginLoader) {
+        for (PhotonPlugin plugin : registry.activePlugins()) {
             modules.add(plugin.getModule());
         }
 
