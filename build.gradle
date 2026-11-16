@@ -3,6 +3,7 @@ plugins {
     id 'application'
     id 'io.freefair.lombok' version '8.6'
     id 'com.google.protobuf' version '0.10.0'
+    id 'com.gradleup.shadow' version '9.2.2'
 }
 
 group = 'org.photonflight'
@@ -75,4 +76,26 @@ sourceSets {
 
 tasks.withType(Test).configureEach {
     useJUnitPlatform()
+}
+
+tasks.named('shadowJar') {
+    archiveFileName = 'photoncore.jar'
+    manifest {
+        attributes 'Main-Class': application.mainClass.get(), 'Multi-Release': 'true'
+    }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    filesMatching('META-INF/services/**') {
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    }
+    mergeServiceFiles()
+
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/SIG-*'
+    exclude 'module-info.class', 'META-INF/versions/**/module-info.class'
+    ['META-INF/LICENSE', 'META-INF/LICENSE.txt', 'META-INF/NOTICE', 'META-INF/NOTICE.txt'].each { resource ->
+        filesMatching(resource) { duplicatesStrategy = DuplicatesStrategy.INCLUDE }
+        append(resource)
+    }
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
 }
