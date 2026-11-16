@@ -41,6 +41,7 @@ public final class CoreGrpcServer {
 
     public void stop(long gracePeriodMs) {
         control.completeSubscriptions();
+        points.stop();
         if (server == null) return;
         server.shutdown();
         try {

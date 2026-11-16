@@ -15,6 +15,11 @@ public record PointCloudData(Path source, Dataset metadata, List<PointBlock> blo
         blocks = List.copyOf(blocks);
     }
 
+    public PointCloudData withRevision(long revision) {
+        return new PointCloudData(source, metadata.toBuilder().setRevision(revision).build(), blocks,
+                scaleX, scaleY, scaleZ, offsetX, offsetY, offsetZ, decodedBytes);
+    }
+
     public double x(PointBlock block, int point) {
         return block.coordinate(point, 0) * scaleX + offsetX;
     }

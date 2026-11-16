@@ -3,6 +3,7 @@ package org.photonflight.core.grpc;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import lombok.RequiredArgsConstructor;
@@ -10,14 +11,13 @@ import org.photonflight.core.Application;
 import org.photonflight.core.PhotonCore;
 import org.photonflight.core.dataset.LasDatasetDecoder;
 import org.photonflight.core.dataset.PointCloudData;
+import org.photonflight.core.service.PluginRegistry;
 import org.photonflight.proto.application.v1.*;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.ArrayDeque;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -30,6 +30,9 @@ public final class CoreControlGrpcService extends CoreControlServiceGrpc.CoreCon
     private final Application application;
     private final PhotonCore core;
     private final LasDatasetDecoder decoder;
+    private final PluginRegistry plugins;
+    private final Map<String, Operation> operations = new LinkedHashMap<>();
+    private final Map<String, CompletedCommand> completedCommands = new LinkedHashMap<>();
 
     private static final int MAX_PENDING_EVENTS = 128;
     private final ExecutorService loader = Executors.newSingleThreadExecutor(task -> {
@@ -69,6 +72,21 @@ public final class CoreControlGrpcService extends CoreControlServiceGrpc.CoreCon
     }
 
     @Override
+    public synchronized void getOperation(GetOperationRequest request, StreamObserver<Operation> response) {
+        if (request.getOperationId().isBlank()) {
+            response.onError(Status.INVALID_ARGUMENT.withDescription("operation_id is required").asRuntimeException());
+            return;
+        }
+        var operation = operations.get(request.getOperationId());
+        if (operation == null) {
+            response.onError(Status.NOT_FOUND.withDescription("Operation is unknown or has expired from history").asRuntimeException());
+            return;
+        }
+        response.onNext(operation);
+        response.onCompleted();
+    }
+
+    @Override
     public synchronized void subscribeEvents(SubscribeEventsRequest request, StreamObserver<Event> response) {
         if (state == CoreState.CORE_STATE_SHUTTING_DOWN) {
             response.onError(Status.UNAVAILABLE.withDescription("PhotonCore is shutting down").asRuntimeException());
@@ -83,7 +101,8 @@ public final class CoreControlGrpcService extends CoreControlServiceGrpc.CoreCon
         subscriptions.add(subscription);
 
         if (request.getIncludeSnapshot()) {
-            CoreSnapshot.Builder snapshot = CoreSnapshot.newBuilder().setState(state);
+            CoreSnapshot.Builder snapshot = CoreSnapshot.newBuilder().setState(state)
+                    .addAllPlugins(plugins.snapshot()).addAllOperations(operations.values());
             PointCloudData dataset = core.getActiveDataset();
             if (dataset != null) snapshot.setActiveDataset(dataset.metadata());
             subscription.pending.add(event().setCoreSnapshot(snapshot).build());
@@ -193,6 +212,8 @@ public final class CoreControlGrpcService extends CoreControlServiceGrpc.CoreCon
 
     private void publishOperation(Operation operation) {
         loadOperation = operation;
+        operations.put(operation.getId(), operation);
+        while (operations.size() > 256) operations.remove(operations.keySet().iterator().next());
         publish(event().setOperationProgress(OperationProgress.newBuilder().setOperation(operation)).build());
     }
 
@@ -222,18 +243,136 @@ public final class CoreControlGrpcService extends CoreControlServiceGrpc.CoreCon
         core.replaceDataset(null);
         publish(event().setDatasetUnloaded(DatasetUnloaded.newBuilder().setOperationId(operation.getId())
                 .setDatasetId(request.getDatasetId())).build());
-        publish(event().setOperationProgress(OperationProgress.newBuilder().setOperation(operation)).build());
+        publishOperation(operation);
         response.onNext(UnloadDatasetResponse.newBuilder().setOperation(operation).build());
         response.onCompleted();
     }
 
     @Override
-    public void executeCommand(Command request, StreamObserver<CommandResult> response) {
-        response.onError(
-                Status.UNIMPLEMENTED.withDescription("Command execution is not implemented yet")
-                        .asRuntimeException()
-        );
+    public synchronized void executeCommand(Command request, StreamObserver<CommandResult> response) {
+        try {
+            if (state == CoreState.CORE_STATE_SHUTTING_DOWN) {
+                throw Status.UNAVAILABLE.withDescription("Core is shutting down").asRuntimeException();
+            }
+            if (request.getRequestId().isBlank() || request.getRequestId().length() > 128) {
+                throw Status.INVALID_ARGUMENT
+                        .withDescription("request_id must contain 1 to 128 characters").asRuntimeException();
+            }
+
+            var previous = completedCommands.get(request.getRequestId());
+            if (previous != null) {
+                if (!previous.request.equals(request))
+                    throw Status.ALREADY_EXISTS.withDescription("request_id was used for a different command").asRuntimeException();
+                response.onNext(previous.result);
+                response.onCompleted();
+                return;
+            }
+            if (state != CoreState.CORE_STATE_READY) {
+                throw Status.FAILED_PRECONDITION.withDescription("Core must be ready to execute commands").asRuntimeException();
+            }
+            var result = CommandResult.newBuilder().setRequestId(request.getRequestId());
+
+            switch (request.getPayloadCase()) {
+                case ADD_ANNOTATION -> {
+                    var command = request.getAddAnnotation();
+                    if (!command.hasPosition() || !Double.isFinite(command.getPosition().getX())
+                            || !Double.isFinite(command.getPosition().getY())
+                            || !Double.isFinite(command.getPosition().getZ())
+                            || command.getText().getBytes(StandardCharsets.UTF_8).length > 2048) {
+                        throw Status.INVALID_ARGUMENT.withDescription("Annotations require finite coordinates and at most 2048 UTF-8 text bytes").asRuntimeException();
+                    }
+                    synchronized (core) {
+                        requireRevision(command.getDatasetId(), command.getExpectedRevision());
+                        if (core.getAnnotations().size() >= 10_000) {
+                            throw Status.RESOURCE_EXHAUSTED.withDescription("Annotation limit is 10000 per dataset").asRuntimeException();
+                        }
+
+                        var annotation = new org.photonflight.core.model.Annotation(UUID.randomUUID().toString(), command.getDatasetId(),
+                                command.getPosition().getX(), command.getPosition().getY(), command.getPosition().getZ(), command.getText());
+                        core.addAnnotation(annotation);
+                        result.setResultingRevision(core.getActiveDataset().metadata().getRevision())
+                                .setAddAnnotation(AddAnnotationResult.newBuilder().setAnnotation(annotation.toProto()));
+                        publishDatasetChanged();
+                    }
+                }
+                case REMOVE_ANNOTATION -> {
+                    var command = request.getRemoveAnnotation();
+                    if (command.getAnnotationId().isBlank()) {
+                        throw Status.INVALID_ARGUMENT.withDescription("annotation_id is required").asRuntimeException();
+                    }
+
+                    synchronized (core) {
+                        requireRevision(command.getDatasetId(), command.getExpectedRevision());
+                        if (!core.removeAnnotation(command.getAnnotationId()))
+                            throw Status.NOT_FOUND.withDescription("Annotation does not exist").asRuntimeException();
+                        var removeAnnotation = RemoveAnnotationResult.newBuilder().setAnnotationId(command.getAnnotationId());
+                        result.setResultingRevision(core.getActiveDataset().metadata().getRevision())
+                                .setRemoveAnnotation(removeAnnotation);
+                        publishDatasetChanged();
+                    }
+                }
+                case SET_PLUGIN_ENABLED -> {
+                    var command = request.getSetPluginEnabled();
+                    if (command.getPluginId().isBlank()) {
+                        throw Status.INVALID_ARGUMENT.withDescription("plugin_id is required").asRuntimeException();
+                    }
+
+                    Plugin plugin;
+                    try {
+                        plugin = plugins.setEnabled(command.getPluginId(), command.getEnabled());
+                    } catch (NoSuchElementException missing) {
+                        throw Status.NOT_FOUND.withDescription(missing.getMessage()).asRuntimeException();
+                    } catch (IOException error) {
+                        throw Status.INTERNAL.withDescription("Could not save Core plugin settings").withCause(error).asRuntimeException();
+                    }
+
+                    boolean restart = plugin.getEnabled() != plugin.getActive();
+                    result.setSetPluginEnabled(SetPluginEnabledResult.newBuilder().setPlugin(plugin).setRestartRequired(restart));
+                    var pluginStateChanged = PluginStateChanged.newBuilder()
+                            .setPlugin(plugin)
+                            .setRestartRequired(restart);
+                    publish(event().setPluginStateChanged(pluginStateChanged).build());
+                }
+                default -> throw Status.INVALID_ARGUMENT.withDescription("A command payload is required").asRuntimeException();
+            }
+            CommandResult completed = result.build();
+            completedCommands.put(request.getRequestId(), new CompletedCommand(request, completed));
+
+            while (completedCommands.size() > 512) {
+                // I think Asaad would murder me for this, but it's better than a ConcurrentModificationException...
+                completedCommands.remove(completedCommands.keySet().iterator().next());
+            }
+            response.onNext(completed);
+            response.onCompleted();
+        } catch (StatusRuntimeException error) {
+            response.onError(error);
+        }
     }
+
+    private void requireRevision(String id, long revision) {
+        if (id.isBlank())
+            throw Status.INVALID_ARGUMENT.withDescription("dataset_id is required").asRuntimeException();
+
+        var dataset = core.getActiveDataset();
+        if (dataset == null)
+            throw Status.FAILED_PRECONDITION.withDescription("No dataset is loaded").asRuntimeException();
+        if (!dataset.metadata().getId().equals(id))
+            throw Status.NOT_FOUND.withDescription("Dataset is not active").asRuntimeException();
+        if (dataset.metadata().getRevision() != revision)
+            throw Status.ABORTED.withDescription("Dataset revision changed; refresh and retry").asRuntimeException();
+        if (revision == Long.MAX_VALUE)
+            throw Status.RESOURCE_EXHAUSTED.withDescription("Dataset revision limit reached").asRuntimeException();
+    }
+
+    private void publishDatasetChanged() {
+        var metadata = core.getActiveDataset().metadata();
+        var datasetChanged = DatasetChanged.newBuilder()
+                .setDatasetId(metadata.getId())
+                .setRevision(metadata.getRevision());
+        publish(event().setDatasetChanged(datasetChanged).build());
+    }
+
+    private record CompletedCommand(Command request, CommandResult result) { }
 
     private Event.Builder event() {
         return Event.newBuilder().setTimestampMs(System.currentTimeMillis());
@@ -297,12 +436,9 @@ public final class CoreControlGrpcService extends CoreControlServiceGrpc.CoreCon
         }
     }
 
+    @RequiredArgsConstructor
     private static final class Subscription {
         final ServerCallStreamObserver<Event> observer;
         final ArrayDeque<Event> pending = new ArrayDeque<>();
-
-        Subscription(ServerCallStreamObserver<Event> observer) {
-            this.observer = observer;
-        }
     }
 }
